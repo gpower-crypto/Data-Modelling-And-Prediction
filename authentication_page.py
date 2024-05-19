@@ -1,90 +1,12 @@
-# authentication_page.py
-
 import streamlit as st
-import hashlib
-import sqlite3
-from sqlite3 import Error
 import time
+from utils.db_utils import create_connection, create_user_table, create_dataset_table, insert_user, authenticate_user
 
 # Update the last login time
 def update_last_login_time():
     st.session_state["last_login_time"] = time.time()
 
 def show_authentication_page():
-    # Function to create an SQLite database connection
-    def create_connection(db_file):
-        conn = None
-        try:
-            conn = sqlite3.connect(db_file)
-            return conn
-        except Error as e:
-            print(e)
-        return conn
-
-    # Function to create a new user table
-    def create_user_table(conn):
-        sql_create_users_table = """
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT NOT NULL UNIQUE,
-                password TEXT NOT NULL
-            );
-        """
-        try:
-            c = conn.cursor()
-            c.execute(sql_create_users_table)
-        except Error as e:
-            print(e)
-
-    # Function to create a new dataset table
-    def create_dataset_table(conn):
-        sql_create_datasets_table = """
-            CREATE TABLE IF NOT EXISTS datasets (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                dataset_name TEXT,
-                dataset_path TEXT,
-                FOREIGN KEY (user_id) REFERENCES users (id)
-            );
-        """
-        try:
-            c = conn.cursor()
-            c.execute(sql_create_datasets_table)
-        except Error as e:
-            print(e)
-
-    # Function to insert a new user into the users table
-    def insert_user(conn, username, password):
-        sql_insert_user = """
-            INSERT INTO users (username, password)
-            VALUES (?, ?)
-        """
-        hashed_password = hashlib.sha256(password.encode()).hexdigest()
-        try:
-            cur = conn.cursor()
-            cur.execute(sql_insert_user, (username, hashed_password))
-            conn.commit()
-            return cur.lastrowid
-        except Error as e:
-            print(e)
-
-    # Function to authenticate a user
-    def authenticate_user(conn, username, password):
-        sql_select_user = """
-            SELECT id, password FROM users WHERE username = ?
-        """
-        hashed_password = hashlib.sha256(password.encode()).hexdigest()
-        try:
-            cur = conn.cursor()
-            cur.execute(sql_select_user, (username,))
-            user = cur.fetchone()
-            if user and user[1] == hashed_password:
-                return user[0]  # Return the user id
-            else:
-                return None
-        except Error as e:
-            print(e)
-
     # Create or connect to the database
     conn = create_connection("user_data.db")
 

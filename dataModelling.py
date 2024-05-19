@@ -8,73 +8,23 @@ from sklearn.svm import SVC, SVR
 from sklearn.metrics import accuracy_score, r2_score, mean_squared_error, classification_report
 from sklearn.impute import SimpleImputer
 from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.preprocessing import OneHotEncoder
 import numpy as np
 import plotly.express as px
-import sqlite3
-from sqlite3 import Error
 import os
-from qbutils import fetch_qbo_data
+from utils.qbutils import fetch_qbo_data
+from utils.db_utils import create_connection, fetch_user_datasets
 
 def show_data_analysis_page():
    
     user_id = st.session_state.get("user_id")  # Assume user_id is stored in session state
- 
-    # Function to create an SQLite database connection
-    def create_connection(db_file):
-        conn = None
-        try:
-            conn = sqlite3.connect(db_file)
-            return conn
-        except Error as e:
-            print(e)
-        return conn
     
-        # Create or connect to the database
+    # Create or connect to the database
     conn = create_connection("user_data.db")
 
     # Create tables if they don't exist
     if conn is None:
         st.error("Error: Could not connect to the database.")
-
-    # Function to fetch datasets for a user
-    def fetch_user_datasets(conn, user_id):
-        sql_fetch_datasets = """
-            SELECT dataset_name, dataset_path FROM datasets WHERE user_id = ?
-        """
-        try:
-            cur = conn.cursor()
-            cur.execute(sql_fetch_datasets, (user_id,))
-            rows = cur.fetchall()
-            datasets = [{"dataset_name": row[0], "dataset_path": row[1]} for row in rows]
-            return datasets
-        except Error as e:
-            print(e)
-            return None
-        
-    def insert_dataset(conn, user_id, dataset_name, dataset_path):
-        sql_check_existing_dataset = """
-            SELECT dataset_name FROM datasets WHERE user_id = ? AND dataset_name = ?
-        """
-        sql_insert_dataset = """
-            INSERT INTO datasets (user_id, dataset_name, dataset_path)
-            VALUES (?, ?, ?)
-        """
-        try:
-            cur = conn.cursor()
-            cur.execute(sql_check_existing_dataset, (user_id, dataset_name))
-            existing_dataset = cur.fetchone()
-            if existing_dataset:
-                st.warning(f"Dataset '{dataset_name}' already exists for this user. Please choose a different name.")
-                return None
-            else:
-                cur.execute(sql_insert_dataset, (user_id, dataset_name, dataset_path))
-                conn.commit()
-                return cur.lastrowid
-        except Error as e:
-            print(e)
-            return None
-
 
     def check_data_pattern(y_values):
         unique_values = np.unique(y_values)
