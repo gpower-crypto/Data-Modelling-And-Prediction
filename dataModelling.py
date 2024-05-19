@@ -13,10 +13,23 @@ import numpy as np
 import plotly.express as px
 import os
 from utils.qbutils import fetch_qbo_data
-from utils.db_utils import create_connection, fetch_user_datasets
+from utils.db_utils import create_connection, fetch_user_datasets, insert_dataset
+
+def convert_date_to_numeric(df):
+    date_columns = df.select_dtypes(include=['object']).columns
+    for date_column in date_columns:
+        try:
+            df[date_column] = pd.to_datetime(df[date_column], format='%b-%y')
+        except ValueError:
+            try:
+                df[date_column] = pd.to_datetime(df[date_column])
+            except ValueError:
+                st.write(f"Column {date_column} could not be converted to datetime. Skipping conversion.")
+                continue
+        df[date_column] = df[date_column].apply(lambda x: x.timestamp())
+    return df
 
 def show_data_analysis_page():
-   
     user_id = st.session_state.get("user_id")  # Assume user_id is stored in session state
     
     # Create or connect to the database
@@ -26,6 +39,11 @@ def show_data_analysis_page():
     if conn is None:
         st.error("Error: Could not connect to the database.")
 
+    # Title and description
+    st.title("Data Modeling and Prediction Tool")
+    st.write("This tool allows you to upload a CSV file, visualize data, choose variables and transformations, select a model, and make predictions.")
+
+    # Function to check if data pattern is classification or regression
     def check_data_pattern(y_values):
         unique_values = np.unique(y_values)
         if len(unique_values) <= 10 and y_values.dtype in ['int64', 'object']:
@@ -33,22 +51,11 @@ def show_data_analysis_page():
         else:
             return "regression"
 
-    def convert_dates(df):
-        for col in df.columns:
-            if pd.api.types.is_string_dtype(df[col]) and df[col].str.contains('-').any():
-                try:
-                    df[col] = pd.to_datetime(df[col], errors='coerce')
-                    df[col] = (df[col] - pd.Timestamp('1970-01-01')).dt.days
-                except Exception as e:
-                    st.write(f"Error converting column {col} to date: {e}")
-        return df
-
     selected_dataset = None 
-    df = None 
+    df = None
 
     # Data input section
     st.header("Data Input")
-
     # Option to choose existing dataset or upload new dataset
     data_option = st.radio("Choose data option:", options=["Use existing dataset", "Upload new dataset", "Fetch data from QuickBooks API"])
 
@@ -76,7 +83,6 @@ def show_data_analysis_page():
         
         if uploaded_file is not None:
             df = pd.read_csv(uploaded_file)
-            df = convert_dates(df)
 
             dataset_name = st.text_input("Dataset Name")
             if st.button("Save Dataset"):
@@ -115,11 +121,27 @@ def show_data_analysis_page():
                         st.success("Data fetched successfully!")
                         st.write(df)
                 except Exception as e:
-                    st.error(f"Error fetching data: {e}")                
+                    st.error(f"Error fetching data: {e}")
 
     if selected_dataset or df is not None and not df.empty:
         st.write("Original Data:")
         st.write(df)
+
+        # Convert date columns to datetime
+        df = convert_date_to_numeric(df)
+
+        # Convert date columns to datetime
+        date_columns = df.select_dtypes(include=['object']).columns
+        for date_column in date_columns:
+            try:
+                df[date_column] = pd.to_datetime(df[date_column])
+            except ValueError:
+                st.write(f"Column {date_column} could not be converted to datetime. Skipping conversion.")
+        
+        # Convert datetime columns to numerical format (e.g., timestamp)
+        for date_column in date_columns:
+            if pd.api.types.is_datetime64_any_dtype(df[date_column]):
+                df[date_column] = df[date_column].apply(lambda x: x.timestamp())
 
         # Data plot section
         st.header("Data Plot")
@@ -151,12 +173,19 @@ def show_data_analysis_page():
 
         shuffle_data = st.checkbox("Shuffle data before splitting", value=True)
 
+        # Determine if the dataset is for classification or regression
         st.subheader("Select Dependent Variable:")
         y_variable_choice = st.selectbox("Choose the dependent variable", options=df.columns)
+        task_type = check_data_pattern(df[y_variable_choice])
+
+        # Filter out non-numeric columns
+        numeric_columns = df.select_dtypes(include=['number']).columns.tolist()
+        x_variables = [col for col in numeric_columns if col != x_variable and col != y_variable]
 
         # Remove dependent variable from transformation options
-        x_variables = [col for col in df.columns if col != y_variable_choice]
         x_variables_transformations = {col: ["identity", "sine", "cosine", "square", "root", "ignore"] for col in x_variables}
+        if y_variable_choice in x_variables_transformations:
+            del x_variables_transformations[y_variable_choice]
 
         st.subheader("Variable transformations:")
         transformations = {}
@@ -164,120 +193,102 @@ def show_data_analysis_page():
             transformation = st.selectbox(f"Transformation for {variable}", options=transformation_options)
             transformations[variable] = transformation
 
-        # Determine if the task is classification or regression
-        task_type = check_data_pattern(df[y_variable_choice])
-
-        st.subheader("Select Model:")
+        # Model selection based on task type
         if task_type == "classification":
-            model_name = st.selectbox("Choose a model", options=["Perceptron", "Logistic Regression", "Decision Tree Classifier", "Random Forest Classifier", "Support Vector Classifier"])
+            models = ["Perceptron", "Logistic Regression", "Decision Tree Classifier", "Random Forest Classifier", "Support Vector Classifier"]
         else:
-            model_name = st.selectbox("Choose a model", options=["Linear Regression", "HuberRegressor", "Decision Tree Regressor", "Random Forest Regressor", "Support Vector Regressor"])
+            models = ["Linear Regression", "HuberRegressor", "Decision Tree Regressor", "Random Forest Regressor", "Support Vector Regressor"]
 
-    if st.button("Submit"):
-        # Drop rows with NaN in y values
-        df = df.dropna(subset=[y_variable_choice])
+        # Model selection
+        st.subheader("Select Model:")
+        model_name = st.selectbox("Choose a model", options=models)
 
-        if len(df) > 0:  # Check if the dataset is not empty
+        if st.button("Submit"):
+            # Drop rows with NaN in y values
+            df = df.dropna(subset=[y_variable_choice])
+
             # Split data
             X = df[x_variables]
             y = df[y_variable_choice]
-            
-            if len(X) > 0 and len(y) > 0:  # Check if both X and y contain samples
-                X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=(100 - train_test_ratio) / 100, random_state=42, shuffle=shuffle_data)
-                
-                if len(X_train) > 0 and len(X_test) > 0 and len(y_train) > 0 and len(y_test) > 0:  # Check if train and test sets are not empty
-                    # Display number of rows for training and testing sets
-                    st.write(f"Training set: {X_train.shape[0]} rows")
-                    st.write(f"Testing set: {X_test.shape[0]} rows")
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=(100 - train_test_ratio) / 100, random_state=42, shuffle=shuffle_data)
 
-                    # Preprocess the data
-                    numeric_features = X.select_dtypes(include=['int64', 'float64']).columns
-                    categorical_features = X.select_dtypes(include=['object']).columns
+            # Display number of rows for training and testing sets
+            st.write(f"Training set: {X_train.shape[0]} rows")
+            st.write(f"Testing set: {X_test.shape[0]} rows")
 
-                    numeric_transformer = SimpleImputer(strategy='mean')
-                    categorical_transformer = OneHotEncoder(handle_unknown='ignore')
+            # Impute missing values
+            imputer = SimpleImputer(strategy='mean')
+            X_train = imputer.fit_transform(X_train)
+            X_test = imputer.transform(X_test)
 
-                    preprocessor = ColumnTransformer(
-                        transformers=[
-                            ('num', numeric_transformer, numeric_features),
-                            ('cat', categorical_transformer, categorical_features)
-                        ])
+            # Apply transformations
+            for variable, transformation in transformations.items():
+                col_idx = df.columns.get_loc(variable)
+                if col_idx < X_train.shape[1]: 
+                    if transformation == "sine":
+                        X_train[:, df.columns.get_loc(variable)] = np.sin(X_train[:, df.columns.get_loc(variable)])
+                        X_test[:, df.columns.get_loc(variable)] = np.sin(X_test[:, df.columns.get_loc(variable)])
+                    elif transformation == "cosine":
+                        X_train[:, df.columns.get_loc(variable)] = np.cos(X_train[:, df.columns.get_loc(variable)])
+                        X_test[:, df.columns.get_loc(variable)] = np.cos(X_test[:, df.columns.get_loc(variable)])
+                    elif transformation == "square":
+                        X_train[:, df.columns.get_loc(variable)] = X_train[:, df.columns.get_loc(variable)] ** 2
+                        X_test[:, df.columns.get_loc(variable)] = X_test[:, df.columns.get_loc(variable)] ** 2
+                    elif transformation == "root":
+                        X_train[:, df.columns.get_loc(variable)] = np.sqrt(X_train[:, df.columns.get_loc(variable)])
+                        X_test[:, df.columns.get_loc(variable)] = np.sqrt(X_test[:, df.columns.get_loc(variable)])
+                    elif transformation == "ignore":
+                        X_train = np.delete(X_train, df.columns.get_loc(variable), axis=1)
+                        X_test = np.delete(X_test, df.columns.get_loc(variable), axis=1)
 
-                    X_train = preprocessor.fit_transform(X_train)
-                    X_test = preprocessor.transform(X_test)
-
-                    # Apply transformations
-                    for variable, transformation in transformations.items():
-                        col_idx = df.columns.get_loc(variable)
-                        if col_idx < X_train.shape[1]:  # Check if the column index is within the bounds
-                            if transformation == "sine":
-                                X_train[:, col_idx] = np.sin(X_train[:, col_idx])
-                                X_test[:, col_idx] = np.sin(X_test[:, col_idx])
-                            elif transformation == "cosine":
-                                X_train[:, col_idx] = np.cos(X_train[:, col_idx])
-                                X_test[:, col_idx] = np.cos(X_test[:, col_idx])
-                            elif transformation == "square":
-                                X_train[:, col_idx] = X_train[:, col_idx] ** 2
-                                X_test[:, col_idx] = X_test[:, col_idx] ** 2
-                            elif transformation == "root":
-                                X_train[:, col_idx] = np.sqrt(X_train[:, col_idx])
-                                X_test[:, col_idx] = np.sqrt(X_test[:, col_idx])
-                            elif transformation == "ignore":
-                                X_train = np.delete(X_train, col_idx, axis=1)
-                                X_test = np.delete(X_test, col_idx, axis=1)
-
-                    # Fit model and make predictions
-                    if task_type == "classification":
-                        if model_name == "Perceptron":
-                            model = Perceptron()
-                        elif model_name == "Logistic Regression":
-                            model = LogisticRegression()
-                        elif model_name == "Decision Tree Classifier":
-                            model = DecisionTreeClassifier()
-                        elif model_name == "Random Forest Classifier":
-                            model = RandomForestClassifier()
-                        elif model_name == "Support Vector Classifier":
-                            model = SVC()
-
-                        model.fit(X_train, y_train)
-                        y_pred = model.predict(X_test)
-                        st.metric("Accuracy", accuracy_score(y_test, y_pred))
-                        st.write("Classification Report:")
-                        st.text(classification_report(y_test, y_pred))
-                    else:
-                        if model_name == "Linear Regression":
-                            model = LinearRegression()
-                        elif model_name == "HuberRegressor":
-                            model = HuberRegressor()
-                        elif model_name == "Decision Tree Regressor":
-                            model = DecisionTreeRegressor()
-                        elif model_name == "Random Forest Regressor":
-                            model = RandomForestRegressor()
-                        elif model_name == "Support Vector Regressor":
-                            model = SVR()
-
-                        model.fit(X_train, y_train)
-                        y_pred = model.predict(X_test)
-                        st.metric("Mean Squared Error", mean_squared_error(y_test, y_pred))
-                        st.metric("R^2", r2_score(y_test, y_pred))
-
-                    # Display results
-                    st.subheader("Model Performance:")
-                    st.write("Predictions vs Actual:")
-                    results = pd.DataFrame({"Actual": y_test, "Predicted": y_pred})
-                    st.dataframe(results, width=700)
-
-                    # Plot predicted vs actual using Plotly
-                    fig = px.scatter(x=y_test, y=y_pred, labels={'x': 'Actual', 'y': 'Predicted'}, title="Predicted vs Actual")
-                    fig.add_shape(
-                        type="line",
-                        x0=min(y_test), y0=min(y_test), x1=max(y_test), y1=max(y_test),
-                        line=dict(color="red", dash="dash")
-                    )
-                    st.plotly_chart(fig)
-                else:
-                    st.warning("Train or test set is empty after splitting. Adjust the parameters.")
+            # Fit model
+            if task_type == "classification":
+                if model_name == "Perceptron":
+                    model = Perceptron()
+                elif model_name == "Logistic Regression":
+                    model = LogisticRegression()
+                elif model_name == "Decision Tree Classifier":
+                    model = DecisionTreeClassifier()
+                elif model_name == "Random Forest Classifier":
+                    model = RandomForestClassifier()
+                elif model_name == "Support Vector Classifier":
+                    model = SVC()           
             else:
-                st.warning("X or y contains no samples. Adjust the parameters.")
-        else:
-            st.warning("Datframe is empty. Adjust the parameters.")
+                if model_name == "Support Vector Classifier":
+                    model = SVC()
+                elif model_name == "Linear Regression":
+                    model = LinearRegression()
+                elif model_name == "HuberRegressor":
+                    model = HuberRegressor()
+                elif model_name == "Decision Tree Regressor":
+                    model = DecisionTreeRegressor()
+                elif model_name == "Random Forest Regressor":
+                    model = RandomForestRegressor()
+                elif model_name == "Support Vector Regressor":
+                    model = SVR()
+
+            model.fit(X_train, y_train)
+            y_pred = model.predict(X_test)
+            
+            if task_type == "classification":
+                st.metric("Accuracy", accuracy_score(y_test, y_pred))
+                st.write("Classification Report:")
+                st.text(classification_report(y_test, y_pred))
+            else:
+                st.metric("Mean Squared Error", mean_squared_error(y_test, y_pred))
+                st.metric("R^2", r2_score(y_test, y_pred))
+
+            # Display results
+            st.subheader("Model Performance:")
+            st.write("Predictions vs Actual:")
+            results = pd.DataFrame({"Actual": y_test, "Predicted": y_pred})
+            st.dataframe(results, width=700)
+
+            # Plot predicted vs actual using Plotly
+            fig = px.scatter(x=y_test, y=y_pred, labels={'x': 'Actual', 'y': 'Predicted'}, title="Predicted vs Actual")
+            fig.add_shape(
+                type="line",
+                x0=min(y_test), y0=min(y_test), x1=max(y_test), y1=max(y_test),
+                line=dict(color="red", dash="dash")
+            )
+            st.plotly_chart(fig)
