@@ -26,7 +26,7 @@ def sign_out():
     st.session_state["user_authenticated"] = False
     st.session_state["user_id"] = None
     st.session_state["last_login_time"] = None
-    st.experimental_rerun()
+    st.rerun()
 
 # Ensure the session state is properly initialized
 def initialize_session_state():
