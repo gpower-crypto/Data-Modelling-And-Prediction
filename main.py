@@ -1,6 +1,6 @@
 import streamlit as st
 from authentication_page import show_authentication_page
-from dataModelling import show_data_analysis_page
+from reg import show_data_analysis_page
 import time
 
 # Define the expiration duration in seconds
